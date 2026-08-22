@@ -7,7 +7,7 @@
 // Nothing is written to disk: pasted keys live in memory for the run only.
 
 import chalk from "chalk";
-import { JsonRpcProvider, Wallet, formatEther, getAddress, isAddress } from "ethers";
+import { JsonRpcProvider, Wallet, formatEther, getAddress, isAddress, parseEther } from "ethers";
 import { CHAINS, ChainProfile, resolveChain } from "./chains";
 import { parseNftLink } from "./nft-link";
 import { resolveSlug } from "./slug-resolver";
@@ -92,7 +92,23 @@ export async function runWizard(): Promise<void> {
 
   // ── 6. Read the public drop from chain ────────────────────────────────
   console.log(chalk.bold.white("\nDrop"));
-  const mintPlan = await buildLocalMintPlan(rpcUrls[0], nftContract, quantity);
+
+  // Optional dev-rug hedge: over-provision every tx to this max price per NFT.
+  // SeaDrop charges the CURRENT price and refunds the excess, so a mid-mint
+  // price hike up to this cap still succeeds. 0n = send exactly current price.
+  let maxMintPrice = 0n;
+  const rawMaxPrice = process.env.MAX_MINT_PRICE_ETH;
+  if (rawMaxPrice && rawMaxPrice.trim() !== "") {
+    try {
+      maxMintPrice = parseEther(rawMaxPrice.trim());
+    } catch {
+      console.log(
+        chalk.yellow(`  ⚠ Ignoring invalid MAX_MINT_PRICE_ETH="${rawMaxPrice}" — expected a decimal ETH amount.`)
+      );
+    }
+  }
+
+  const mintPlan = await buildLocalMintPlan(rpcUrls[0], nftContract, quantity, maxMintPrice);
   if (!mintPlan) {
     throw new Error(
       `No SeaDrop public drop readable for ${nftContract} on ${chainProfile.name}.\n` +
@@ -109,9 +125,16 @@ export async function runWizard(): Promise<void> {
   console.log(chalk.gray(`    Fee recipient: ${mintPlan.feeRecipient}`));
   console.log(
     chalk.gray(
-      `    Price:         ${formatEther(drop.mintPrice)} × ${quantity} = ${formatEther(mintPlan.value)} per wallet`
+      `    Price:         ${formatEther(drop.mintPrice)} × ${quantity} = ${formatEther(drop.mintPrice * BigInt(quantity))} per wallet`
     )
   );
+  if (mintPlan.maxMintPrice > drop.mintPrice) {
+    console.log(
+      chalk.gray(
+        `    Reserved:      ${formatEther(mintPlan.value)} per wallet (max ${formatEther(mintPlan.maxMintPrice)}/NFT — excess auto-refunded by SeaDrop)`
+      )
+    );
+  }
   console.log(chalk.gray(`    Max per wallet: ${drop.maxTotalMintableByWallet || "unlimited"}`));
   console.log(
     chalk.gray(
@@ -218,7 +241,9 @@ export async function runWizard(): Promise<void> {
   line("Quantity", `${quantity} per wallet → ${quantity * wallets.length} total`);
   line(
     "Mint cost",
-    `${formatEther(mintPlan.value)} per wallet → ${formatEther(mintPlan.value * BigInt(wallets.length))} total (+ gas)`
+    mintPlan.maxMintPrice > drop.mintPrice
+      ? `${formatEther(mintPlan.value)} reserved per wallet → ${formatEther(mintPlan.value * BigInt(wallets.length))} total (excess refunded)`
+      : `${formatEther(mintPlan.value)} per wallet → ${formatEther(mintPlan.value * BigInt(wallets.length))} total (+ gas)`
   );
   line("Gas", `${maxFeeGwei} / ${priorityGwei} gwei · limit ${gasLimit}`);
   line("Timing", timingLabel);

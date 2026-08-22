@@ -8,8 +8,12 @@
   },
   "scripts": {
     "build": "tsc",
+    "test": "npm run build && node --test test/*.test.js",
+    "bench": "npm run build && node bench/dispatch.js",
     "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts"
+    "dev": "ts-node src/index.ts",
+    "bot": "node dist/telegram-bot.js",
+    "bot:dev": "ts-node src/telegram-bot.ts"
   },
   "keywords": [
     "nft",
@@ -25,7 +29,9 @@
     "chalk": "^4.1.2",
     "dotenv": "^16.3.1",
     "ethers": "^6.9.0",
-    "ora": "^5.4.1"
+    "grammy": "^1.22.4",
+    "ora": "^5.4.1",
+    "undici": "^7.29.0"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",

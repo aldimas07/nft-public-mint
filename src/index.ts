@@ -8,6 +8,7 @@ dotenv.config({ path: path.resolve(process.cwd(), ".env") });
 
 import { runWizard } from "./wizard";
 import { closePrompts } from "./prompt";
+import { rpcTransport } from "./rpc-transport";
 
 const HELP = `
 NFT Public Mint Sniper
@@ -25,19 +26,19 @@ gas and timing. Optional defaults can be set in .env (see .env.example).
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
-  if (args.includes("--help") || args.includes("-h")) {
-    console.log(HELP);
-    return;
-  }
-
   try {
+    if (args.includes("--help") || args.includes("-h")) {
+      console.log(HELP);
+      return;
+    }
+
     await runWizard();
-    closePrompts();
-    process.exit(0);
   } catch (err: any) {
-    closePrompts();
     console.error(chalk.red(`\n❌ ${err.message}\n`));
-    process.exit(1);
+    process.exitCode = 1;
+  } finally {
+    closePrompts();
+    await rpcTransport.close();
   }
 }
 

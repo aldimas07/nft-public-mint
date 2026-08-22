@@ -1,5 +1,6 @@
 import chalk from "chalk";
 import { keccak256 } from "ethers";
+import { rpcTransport } from "./rpc-transport";
 
 export interface RpcEndpoint {
   url: string;
@@ -65,10 +66,16 @@ export function prepareBlast(rawTx: string): PreparedBlast {
 // Blast a raw signed tx to all RPC endpoints simultaneously — FIRE AND FORGET
 // Returns immediately after initiating fetch calls (sub-ms dispatch)
 // Responses are collected via the returned promise for logging later
+export interface BlastDispatch {
+  txHash: string;
+  firstAcceptedPromise: Promise<BlastResult | null>;
+  responsePromise: Promise<BlastResult[]>;
+}
+
 export function blastToAll(
   rawTxOrPrepared: string | PreparedBlast,
   endpoints: RpcEndpoint[]
-): { txHash: string; responsePromise: Promise<BlastResult[]> } {
+): BlastDispatch {
   const prepared: PreparedBlast =
     typeof rawTxOrPrepared === "string"
       ? prepareBlast(rawTxOrPrepared)
@@ -76,74 +83,86 @@ export function blastToAll(
 
   const { txHash, body } = prepared;
 
-  // Fire ALL requests — these are initiated immediately (non-blocking)
-  const firePromises = endpoints.map((ep) =>
-    fetch(ep.url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body,
-    })
-  );
-
-  // Collect responses asynchronously — caller awaits this AFTER printing dispatch time
-  const responsePromise = Promise.allSettled(firePromises).then(async (settled) => {
-    const results: BlastResult[] = [];
-    for (let i = 0; i < settled.length; i++) {
-      const ep = endpoints[i];
-      const s = settled[i];
-      if (s.status === "fulfilled") {
-        try {
-          const json = (await s.value.json()) as any;
-          if (json.result) {
-            console.log(chalk.green(`  [${i}] ${ep.label}  TX: ${json.result}`));
-            results.push({ label: ep.label, txHash: json.result, error: null });
-          } else if (json.error) {
-            const errMsg = json.error.message || JSON.stringify(json.error);
-            if (errMsg.includes("already known") || errMsg.includes("already exists")) {
-              console.log(chalk.yellow(`  [${i}] ${ep.label}  ERR: already known`));
-            } else {
-              console.log(chalk.red(`  [${i}] ${ep.label}  ERR: ${errMsg}`));
-            }
-            results.push({ label: ep.label, txHash: null, error: errMsg });
-          }
-        } catch (err: any) {
-          console.log(chalk.red(`  [${i}] ${ep.label}  ERR: ${err.message}`));
-          results.push({ label: ep.label, txHash: null, error: err.message });
-        }
-      } else {
-        console.log(chalk.red(`  [${i}] ${ep.label}  ERR: ${s.reason?.message || s.reason}`));
-        results.push({ label: ep.label, txHash: null, error: s.reason?.message || String(s.reason) });
-      }
+  let resolveFirstAccepted: (result: BlastResult | null) => void;
+  const firstAcceptedPromise = new Promise<BlastResult | null>((resolve) => {
+    resolveFirstAccepted = resolve;
+  });
+  let remaining = endpoints.length;
+  let accepted = false;
+  const complete = (result: BlastResult): BlastResult => {
+    const isAccepted = result.txHash !== null || /already known|already exists/i.test(result.error ?? "");
+    if (isAccepted && !accepted) {
+      accepted = true;
+      resolveFirstAccepted(result);
     }
-    return results;
+    remaining -= 1;
+    if (remaining === 0 && !accepted) resolveFirstAccepted(null);
+    return result;
+  };
+  if (remaining === 0) resolveFirstAccepted!(null);
+
+  const startedAt = performance.now();
+  const firePromises = endpoints.map(async (ep, i): Promise<BlastResult> => {
+    const enqueuedAt = performance.now();
+    try {
+      const { response, text } = await rpcTransport.requestText(ep.url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+      }, 8_000);
+      const respondedAt = performance.now();
+      let json: any;
+      try {
+        json = JSON.parse(text);
+      } catch {
+        const error = `HTTP ${response.status ?? "?"}: non-JSON response`;
+        return complete({ label: ep.label, txHash: null, error });
+      }
+      if (json.result) {
+        console.log(chalk.green(`  [${i}] ${ep.label}  TX: ${json.result}  +${(respondedAt - startedAt).toFixed(1)}ms`));
+        return complete({ label: ep.label, txHash: json.result, error: null });
+      }
+      const error = json.error?.message || JSON.stringify(json.error || json);
+      if (error.includes("already known") || error.includes("already exists")) {
+        console.log(chalk.yellow(`  [${i}] ${ep.label}  ERR: already known  +${(respondedAt - startedAt).toFixed(1)}ms`));
+      } else {
+        console.log(chalk.red(`  [${i}] ${ep.label}  ERR: ${error}`));
+      }
+      return complete({ label: ep.label, txHash: null, error });
+    } catch (err: any) {
+      const error = err?.name === "AbortError" ? "request timeout" : err?.message || String(err);
+      console.log(chalk.red(`  [${i}] ${ep.label}  ERR: ${error} (queued +${(enqueuedAt - startedAt).toFixed(2)}ms)`));
+      return complete({ label: ep.label, txHash: null, error });
+    }
   });
 
+  const responsePromise = Promise.all(firePromises);
+
   // Return IMMEDIATELY — txHash computed locally, fetches already in flight
-  return { txHash, responsePromise };
+  return { txHash, firstAcceptedPromise, responsePromise };
 }
 
-// Wait for tx receipt and return block info
+// Wait for tx receipt and return block info.
+// timeoutMs may be a function so the cap can shrink mid-wait (e.g. once a mint
+// is confirmed sold out, stop waiting full timeouts for the remaining txs).
 export async function waitForReceipt(
   txHash: string,
   rpcUrl: string,
-  timeoutMs: number = 30000
+  timeoutMs: number | (() => number) = 30000
 ): Promise<{ block: number; position: number; gasUsed: number; status: string } | null> {
   const start = Date.now();
 
-  while (Date.now() - start < timeoutMs) {
+  while (true) {
+    const limit = typeof timeoutMs === "function" ? timeoutMs() : timeoutMs;
+    if (Date.now() - start >= limit) break;
     try {
-      const res = await fetch(rpcUrl, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          method: "eth_getTransactionReceipt",
-          params: [txHash],
-          id: 1,
-        }),
-      });
-
-      const json = (await res.json()) as any;
+      const { text } = await rpcTransport.rpc(
+        rpcUrl,
+        "eth_getTransactionReceipt",
+        [txHash],
+        Math.min(5_000, limit)
+      );
+      const json = JSON.parse(text) as any;
       const receipt = json.result;
 
       if (receipt) {

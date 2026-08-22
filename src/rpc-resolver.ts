@@ -11,6 +11,7 @@
 // verifyChainId() then confirms the node actually is that chain before we sign.
 
 import { ChainProfile, resolveChain } from "./chains";
+import { rpcTransport } from "./rpc-transport";
 
 export interface ResolvedRpcs {
   urls: string[];
@@ -148,30 +149,25 @@ export interface RpcPlan {
 
 // Probe result carrying *why* an endpoint failed, so an exhausted API key shows
 // up during setup rather than as a rejected broadcast at fire time.
-async function probe(rpcUrl: string, timeoutMs = 8000): Promise<{ chainId: number | null; error?: string }> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+async function probe(rpcUrl: string, timeoutMs = 8000): Promise<{ chainId: number | null; latencyMs: number; error?: string }> {
+  const startedAt = performance.now();
   try {
-    const res = await fetch(rpcUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", method: "eth_chainId", params: [], id: 1 }),
-      signal: controller.signal,
-    });
-    const text = await res.text();
+    const { response, text } = await rpcTransport.rpc(rpcUrl, "eth_chainId", [], timeoutMs);
     let json: { result?: string; error?: { message?: string } };
     try {
       json = JSON.parse(text);
     } catch {
-      return { chainId: null, error: `HTTP ${res.status} (non-JSON response)` };
+      return { chainId: null, latencyMs: performance.now() - startedAt, error: `HTTP ${response.status ?? "?"} (non-JSON response)` };
     }
-    if (json.result) return { chainId: parseInt(json.result, 16) };
-    if (json.error?.message) return { chainId: null, error: json.error.message };
-    return { chainId: null, error: `HTTP ${res.status}` };
+    if (json.result) return { chainId: parseInt(json.result, 16), latencyMs: performance.now() - startedAt };
+    const error = json.error?.message || `HTTP ${response.status ?? "?"}`;
+    return { chainId: null, latencyMs: performance.now() - startedAt, error };
   } catch (err: unknown) {
-    return { chainId: null, error: err instanceof Error ? err.message : String(err) };
-  } finally {
-    clearTimeout(timer);
+    return {
+      chainId: null,
+      latencyMs: performance.now() - startedAt,
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
 }
 
@@ -182,18 +178,28 @@ async function probe(rpcUrl: string, timeoutMs = 8000): Promise<{ chainId: numbe
 // Some endpoints in the public list (Base's sequencer, for one) only accept
 // eth_sendRawTransaction — perfect to blast at, useless to read from. Anything
 // reporting a different chain is dropped outright rather than blasted at.
+function isSendOnlyError(error: string | undefined): boolean {
+  return Boolean(error && /method not found|not supported|does not exist|not allowed/i.test(error));
+}
+
 export async function planRpcs(urls: string[], expectedChainId: number): Promise<RpcPlan> {
   const probes = await Promise.all(
     urls.map(async (url) => ({ url, ...(await probe(url)) }))
   );
 
-  const matching = probes.filter((p) => p.chainId === expectedChainId).map((p) => p.url);
-  const sendOnly = probes.filter((p) => p.chainId === null).map((p) => p.url);
+  const matching = probes
+    .filter((p) => p.chainId === expectedChainId)
+    .sort((a, b) => a.latencyMs - b.latencyMs)
+    .map((p) => p.url);
+  const sendOnly = probes
+    .filter((p) => p.chainId === null && isSendOnlyError(p.error))
+    .sort((a, b) => a.latencyMs - b.latencyMs)
+    .map((p) => p.url);
   const dropped = probes
     .filter((p) => p.chainId !== null && p.chainId !== expectedChainId)
     .map((p) => ({ url: p.url, chainId: p.chainId as number }));
   const failures = probes
-    .filter((p) => p.chainId === null && p.error)
+    .filter((p) => p.chainId === null && p.error && !isSendOnlyError(p.error))
     .map((p) => ({ url: p.url, message: p.error as string }));
 
   return {
@@ -211,21 +217,6 @@ export async function verifyChainId(
   rpcUrl: string,
   timeoutMs = 8000
 ): Promise<number | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(rpcUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", method: "eth_chainId", params: [], id: 1 }),
-      signal: controller.signal,
-    });
-    const json = (await res.json()) as { result?: string };
-    if (!json.result) return null;
-    return parseInt(json.result, 16);
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
+  const result = await probe(rpcUrl, timeoutMs);
+  return result.chainId;
 }

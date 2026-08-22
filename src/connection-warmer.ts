@@ -1,28 +1,17 @@
 import chalk from "chalk";
+import { rpcTransport } from "./rpc-transport";
 
-// Pre-establish TCP/TLS to every RPC so the first real request doesn't pay for
-// a handshake. Some endpoints (Base's sequencer, for one) only accept send
-// methods, so we warm with eth_sendRawTransaction and ignore the error — the
-// handshake is the point, not the response.
-export async function warmConnections(rpcUrls: string[]): Promise<void> {
+export interface WarmResult {
+  url: string;
+  ok: boolean;
+}
+
+export async function warmConnections(rpcUrls: string[], timeoutMs = 8_000): Promise<WarmResult[]> {
   console.log(chalk.gray("  Warming connections..."));
-
-  await Promise.all(
-    rpcUrls.map((url) =>
-      fetch(url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          method: "eth_sendRawTransaction",
-          params: ["0x00"],
-          id: 1,
-        }),
-      })
-        .then(() => {})
-        .catch(() => {})
-    )
+  const results = await Promise.all(
+    rpcUrls.map(async (url) => ({ url, ok: await rpcTransport.warm(url, timeoutMs) }))
   );
-
-  console.log(chalk.green("  Connections hot."));
+  const ready = results.filter((result) => result.ok).length;
+  console.log(chalk.green(`  Connections hot: ${ready}/${results.length}.`));
+  return results;
 }
