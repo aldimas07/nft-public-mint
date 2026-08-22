@@ -226,6 +226,15 @@ function stepSummary(s: MintSession): string {
 // Keyboards
 // ============================================
 
+function keysKeyboard(hasKeys: boolean): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  if (hasKeys) {
+    kb.text("✅ Done (Continue to Chain)", "keys_done").row();
+  }
+  kb.text("❌ Cancel", "confirm_no");
+  return kb;
+}
+
 function chainKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
     .text("Ethereum", "chain_ethereum")
@@ -455,6 +464,20 @@ bot.callbackQuery("cmd_mint", async (ctx) => {
   ctx.session = initialSession();
   await ctx.answerCallbackQuery();
   await startKeysStep(ctx);
+});
+
+bot.callbackQuery("keys_done", async (ctx) => {
+  const s = ctx.session;
+  if (s.walletKeys.length === 0) {
+    await ctx.answerCallbackQuery("Need at least 1 key");
+    await ctx.reply("❌ Need at least one valid key. Send a key or press Cancel.", { reply_markup: keysKeyboard(false) });
+    return;
+  }
+  await ctx.answerCallbackQuery(`Loaded ${s.walletKeys.length} wallet(s)`);
+  await cleanupKeyMessages(ctx);
+  s.step = "chain";
+  await ctx.reply(`✅ Loaded ${s.walletKeys.length} wallet(s).`);
+  await sendChainStep(ctx);
 });
 
 bot.callbackQuery("cmd_status", async (ctx) => {
@@ -751,8 +774,8 @@ async function startKeysStep(ctx: MyContext) {
     "🔒 <b>Security & Privacy Guarantee:</b>\n" +
     "• Key messages are auto-deleted immediately from chat.\n" +
     "• Keys exist only in RAM during execution — never saved.\n\n" +
-    "Type <b>done</b> when finished (minimum 1 key).",
-    new InlineKeyboard().text("❌ Cancel", "confirm_no")
+    "Tap <b>Done (Continue to Chain)</b> below when finished (minimum 1 key).",
+    keysKeyboard(false)
   );
 }
 
@@ -772,9 +795,10 @@ async function handleKeysStep(ctx: MyContext, text: string) {
   for (const raw of lines) {
     if (raw.toLowerCase() === "done") {
       if (s.walletKeys.length === 0) {
-        await ctx.reply("❌ Need at least one valid key. Send a key or press Cancel.");
+        await ctx.reply("❌ Need at least one valid key. Send a key or press Cancel.", { reply_markup: keysKeyboard(false) });
         return;
       }
+      await cleanupKeyMessages(ctx);
       s.step = "chain";
       await ctx.reply(`✅ Loaded ${s.walletKeys.length} wallet(s).`);
       await sendChainStep(ctx);
@@ -786,18 +810,22 @@ async function handleKeysStep(ctx: MyContext, text: string) {
     try {
       wallet = new Wallet(normalized);
     } catch {
-      await ctx.reply(`❌ Invalid private key format received. Try again.`);
+      await ctx.reply(`❌ Invalid private key format received. Try again.`, { reply_markup: keysKeyboard(s.walletKeys.length > 0) });
       continue;
     }
 
     const dup = s.walletKeys.some(k => new Wallet(k).address.toLowerCase() === wallet.address.toLowerCase());
     if (dup) {
-      await ctx.reply(`⚠️ Duplicate key of <code>${shortAddr(wallet.address)}</code> — skipped.`, { parse_mode: "HTML" });
+      await ctx.reply(`⚠️ Duplicate key of <code>${shortAddr(wallet.address)}</code> — skipped.`, { parse_mode: "HTML", reply_markup: keysKeyboard(s.walletKeys.length > 0) });
       continue;
     }
 
     s.walletKeys.push(normalized);
-    await ctx.reply(`✅ <b>[W${s.walletKeys.length - 1}]</b> <code>${wallet.address}</code>`, { parse_mode: "HTML" });
+    await ctx.reply(
+      `✅ <b>[W${s.walletKeys.length - 1}]</b> <code>${wallet.address}</code>\n\n` +
+      `<i>Tap <b>Done (Continue to Chain)</b> below when finished adding keys.</i>`,
+      { parse_mode: "HTML", reply_markup: keysKeyboard(true) }
+    );
   }
 }
 

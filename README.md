@@ -95,6 +95,7 @@ npm run bot
 ### Telegram Bot Features & Security:
 
 - 🔐 **Privacy & Immediate Key Scrubbing:** Private key messages are auto-deleted from chat history immediately upon receipt. In-memory sessions automatically expire after 15 minutes of inactivity.
+- ✅ **One-Tap Done Button:** Tap the inline `Done (Continue to Chain)` button after adding key(s) to advance directly to chain selection.
 - ⛽ **One-Tap Gas Presets:** Select pre-calculated gas fees (`🟢 Safe`, `⚡ Fast`, `🔥 Aggressive`) or click `🔄 Refresh Fee` to fetch the live network base fee.
 - 💰 **Financial Outflow Summary & Risk Warning:** View total max ETH exposure (`(Mint Cost + Reserved Gas) × Wallets`) with prominent warning badges for high-value mints (> 0.2 ETH).
 - 🔄 **Sub-Step Navigation & Reset:** Seamless back-navigation and one-tap `🗑 Cancel` button to purge session memory instantly.
