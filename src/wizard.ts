@@ -19,7 +19,7 @@ import {
   toRpcUrl,
 } from "./rpc-resolver";
 import { parseRpcEndpoints } from "./rpc-blast";
-import { buildLocalMintPlan, LocalMintPlan } from "./seadrop-public";
+import { buildLocalMintPlan, fetchMintStatus, LocalMintPlan } from "./seadrop-public";
 import { localPublicSnipe } from "./local-mint";
 import { istTimeToDate, toIST } from "./time-format";
 import { askChoice, askHidden, askNumber, askText, askYesNo, closePrompts } from "./prompt";
@@ -114,6 +114,22 @@ export async function runWizard(): Promise<void> {
       `No SeaDrop public drop readable for ${nftContract} on ${chainProfile.name}.\n` +
         "  Either it isn't a SeaDrop collection, or it keeps its drop config on the token contract."
     );
+  }
+
+  const dummyWallet = walletKeys.length > 0 ? new Wallet(walletKeys[0]).address : "0x0000000000000000000000000000000000000000";
+  try {
+    const mintStatus = await fetchMintStatus(rpcUrls[0], nftContract, mintPlan, dummyWallet);
+    if (mintStatus.mintedOut) {
+      console.log(
+        chalk.bold.red(
+          `\n  🚫 MINTED OUT: Collection is already fully minted out on-chain! ` +
+          `(totalSupply ${mintStatus.totalSupply ?? "?"}${mintStatus.maxSupply !== null ? ` / ${mintStatus.maxSupply}` : ""})`
+        )
+      );
+      throw new Error("Collection is minted out on-chain — stopping wizard before gas/timing setup.");
+    }
+  } catch (err: any) {
+    if (err.message?.includes("minted out")) throw err;
   }
 
   const drop = mintPlan.drop;

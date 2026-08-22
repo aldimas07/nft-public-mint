@@ -16,7 +16,7 @@ import {
   toRpcUrl,
 } from "./rpc-resolver";
 import { parseRpcEndpoints } from "./rpc-blast";
-import { buildLocalMintPlan, LocalMintPlan } from "./seadrop-public";
+import { buildLocalMintPlan, fetchMintStatus, LocalMintPlan } from "./seadrop-public";
 import { localPublicSnipe } from "./local-mint";
 import { istTimeToDate, toIST } from "./time-format";
 
@@ -1035,6 +1035,32 @@ async function proceedToGasStep(ctx: MyContext) {
     return;
   }
   s.mintPlan = mintPlan;
+
+  // Early check: if collection is already minted out (sold out) on-chain, stop setup immediately
+  const dummyWallet = s.walletKeys.length > 0 ? new Wallet(s.walletKeys[0]).address : "0x0000000000000000000000000000000000000000";
+  try {
+    const mintStatus = await fetchMintStatus(s.rpcUrls[0], s.nftContract!, mintPlan, dummyWallet);
+    if (mintStatus.mintedOut) {
+      const supplyInfo = `totalSupply ${mintStatus.totalSupply ?? "?"}${mintStatus.maxSupply !== null ? ` / ${mintStatus.maxSupply}` : ""}`;
+      await ctx.reply(
+        `🚫 <b>Collection Sold Out On-Chain!</b>\n\n` +
+        `Target: <b>${escapeHtml(s.nftLabel ?? "")}</b>\n` +
+        `Contract: <code>${escapeHtml(s.nftContract!)}</code>\n` +
+        `Supply Status: <b>${escapeHtml(supplyInfo)}</b>\n\n` +
+        `This stage is already fully minted out. Setup stopped — no further action required.`,
+        {
+          parse_mode: "HTML",
+          reply_markup: new InlineKeyboard()
+            .text("🎯 Change Target", "nav_back")
+            .text("🔄 Start New Mint", "cmd_mint"),
+        }
+      );
+      s.step = "target";
+      return;
+    }
+  } catch {
+    // Non-fatal if mint status probe fails — proceed with setup
+  }
 
   const drop = mintPlan.drop;
   const startsAt = new Date(drop.startTime * 1000);
