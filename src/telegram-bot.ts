@@ -240,6 +240,7 @@ function chainKeyboard(): InlineKeyboard {
     .text("Ethereum", "chain_ethereum")
     .text("Base", "chain_base")
     .text("Robinhood", "chain_robinhood")
+    .text("Ink (Kraken L2)", "chain_ink")
     .row()
     .text("⬅️ Back", "nav_back")
     .text("🗑 Cancel", "cmd_cancel");
@@ -262,9 +263,10 @@ function quantityKeyboard(): InlineKeyboard {
     .text("🗑 Cancel", "cmd_cancel");
 }
 
-function rpcKeyboard(hasEnv: boolean): InlineKeyboard {
+function rpcKeyboard(hasEnv: boolean, hasPublicEndpoints: boolean): InlineKeyboard {
   const kb = new InlineKeyboard();
   if (hasEnv) kb.text("⚡ Use .env RPCs", "rpc_use_env").row();
+  if (hasPublicEndpoints) kb.text("🌐 Use Public RPC", "rpc_use_public").row();
   kb.text("⬅️ Back", "nav_back").text("🗑 Cancel", "cmd_cancel");
   return kb;
 }
@@ -540,6 +542,14 @@ bot.callbackQuery("rpc_use_env", async (ctx) => {
   const chainProfile = resolveChain(s.chainKey!)!;
   const fromEnv = privateRpcsFromEnv(chainProfile.key);
   await processAndApplyRpcs(ctx, fromEnv);
+});
+
+bot.callbackQuery("rpc_use_public", async (ctx) => {
+  await ctx.answerCallbackQuery("Using public RPC endpoints…");
+  const s = ctx.session;
+  const chainProfile = resolveChain(s.chainKey!)!;
+  const publicUrls = chainProfile.rpc.public ?? [];
+  await processAndApplyRpcs(ctx, publicUrls);
 });
 
 bot.callbackQuery(/^gas_preset_([\d.]+)_([\d.]+)$/, async (ctx) => {
@@ -952,7 +962,12 @@ async function proceedToRpcStep(ctx: MyContext) {
     msg += `⚠️ No private RPCs in .env for ${escapeHtml(chainProfile.name)}.\n`;
   }
 
-  await sendStepHeader(ctx, "🌐 Step 5: RPC Setup", msg, rpcKeyboard(fromEnv.length > 0));
+  const hasPublicEndpoints = (chainProfile.rpc.public?.length ?? 0) > 0;
+  if (!fromEnv.length && hasPublicEndpoints) {
+    msg += `\n🔗 <b>Public endpoints:</b> ${chainProfile.rpc.public.map(u => `<code>${escapeHtml(u)}</code>`).join(", ")}`;
+  }
+
+  await sendStepHeader(ctx, "🌐 Step 5: RPC Setup", msg, rpcKeyboard(fromEnv.length > 0, hasPublicEndpoints));
 }
 
 async function processAndApplyRpcs(ctx: MyContext, manualUrls: string[]) {

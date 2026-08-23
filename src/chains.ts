@@ -69,6 +69,20 @@ export const CHAINS: ChainProfile[] = [
       ],
     },
   },
+  {
+    key: "ink",
+    chainId: 57073,
+    name: "Ink (Kraken L2)",
+    explorer: "https://explorer.inkonchain.com",
+    nativeSymbol: "INK",
+    rpc: {
+      public: [
+        "https://rpc-gateway.inkonchain.com",
+        "https://rpc.inkonchain.com",
+        "https://ink.drpc.org",
+      ],
+    },
+  },
 ];
 
 const DEFAULT_EXPLORER = "https://basescan.org";

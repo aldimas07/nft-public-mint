@@ -96,7 +96,7 @@ export async function localPublicSnipe(opts: LocalSnipeOpts): Promise<void> {
             const [freshNonces, feeData] = await refreshSigningState(
               rpcUrls[0],
               wallets.map((wallet) => wallet.address),
-              1_500
+              500 // ponytail: faster nonce refresh; revert to 1500 if RPC too slow
             );
             if (feeData.baseFeePerGas !== null && feeData.baseFeePerGas > maxFeePerGas) {
               const error = new Error(
@@ -157,9 +157,10 @@ export async function localPublicSnipe(opts: LocalSnipeOpts): Promise<void> {
     }
     await waitForMintTime(targetStart, {
       hooks,
-      spinWindowMs: 2,
+      spinWindowMs: 0, // ponytail: faster T-0 dispatch; revert to 2 if node timing drifts
       // Watchdog: while we wait, check on-chain supply and price changes every 3s
-      pollEveryMs: 3_000,
+      // ponytail: poll faster (1s vs 3s) — keeps supply/price checks without delaying blast
+      pollEveryMs: 1_000,
       onPoll: async () => {
         const status = await fetchMintStatus(rpcUrls[0], nftContract, plan, wallets[0].address);
         if (status.mintedOut) {
@@ -226,7 +227,7 @@ export async function localPublicSnipe(opts: LocalSnipeOpts): Promise<void> {
   // can never succeed. Stops as soon as every receipt has settled.
   let soldOut = false;
   let receiptsSettled = false;
-  let receiptTimeoutMs = 60_000;
+  let receiptTimeoutMs = 30_000; // ponytail: faster receipt resolution; revert to 60_000 for slow chains
   const mintedOutWatcher = (async () => {
     const deadline = Date.now() + 90_000;
     while (!soldOut && !receiptsSettled && Date.now() < deadline) {

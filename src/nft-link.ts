@@ -19,6 +19,7 @@ const CHAIN_ALIASES: Record<string, string> = {
   mainnet: "ethereum",
   base: "base",
   robinhood: "robinhood",
+  ink: "ink",
 };
 
 function normalizeChain(segment: string): string {

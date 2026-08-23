@@ -175,7 +175,7 @@ export async function waitForReceipt(
       }
     } catch {}
 
-    await new Promise((r) => setTimeout(r, 500));
+    await new Promise((r) => setTimeout(r, 200)); // ponytail: faster poll cycle; revert to 500 if RPC rate-limited
   }
 
   return null;
