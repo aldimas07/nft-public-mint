@@ -59,6 +59,26 @@ export async function localPublicSnipe(opts: LocalSnipeOpts): Promise<void> {
   const chainId = network.chainId;
   console.log(chalk.gray(`  Nonces: [${nonces.join(", ")}] | chainId: ${chainId}`));
 
+  // Nodes reject any tx whose sender balance < gasLimit × maxFee + value —
+  // unconditionally, EIP-1559 refunds don't matter for acceptance. Fail here,
+  // minutes before T-0, instead of discovering it at blast time.
+  const requiredPerWallet = BigInt(gasLimit || 250_000) * maxFeePerGas + plan.value;
+  const balances = await Promise.all(wallets.map((w) => provider.getBalance(w.address)));
+  const broke = wallets
+    .map((w, i) => ({ i, address: w.address, bal: balances[i] }))
+    .filter((x) => x.bal < requiredPerWallet);
+  if (broke.length > 0) {
+    const error = new Error(
+      `${broke.length}/${wallets.length} wallet(s) cannot cover the tx reserve ` +
+      `(${formatEther(requiredPerWallet)} needed per wallet — mint value ${formatEther(plan.value)} + max gas ` +
+      `${formatEther(BigInt(gasLimit || 250_000) * maxFeePerGas)}). ` +
+      `Nodes reject these outright. Deficits: ` +
+      broke.map((x) => `[W${x.i}] have ${formatEther(x.bal)}`).join(", ")
+    );
+    error.name = "UnderfundedError";
+    throw error;
+  }
+
   let prepared: { idx: number; address: string; blast: PreparedBlast }[] = [];
   const prepareTransactions = async (): Promise<void> => {
     const signStart = performance.now();
