@@ -802,40 +802,55 @@ async function handleKeysStep(ctx: MyContext, text: string) {
 
   const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
 
+  // "done" on a line of its own finishes the step
+  const doneLine = lines.find(l => l.toLowerCase() === "done");
+  if (doneLine && s.walletKeys.length === 0) {
+    await ctx.reply("❌ Need at least one valid key. Send a key or press Cancel.", { reply_markup: keysKeyboard(false) });
+    return;
+  }
+
+  let added = 0, dupes = 0, invalid = 0;
   for (const raw of lines) {
-    if (raw.toLowerCase() === "done") {
-      if (s.walletKeys.length === 0) {
-        await ctx.reply("❌ Need at least one valid key. Send a key or press Cancel.", { reply_markup: keysKeyboard(false) });
-        return;
-      }
-      await cleanupKeyMessages(ctx);
-      s.step = "chain";
-      await ctx.reply(`✅ Loaded ${s.walletKeys.length} wallet(s).`);
-      await sendChainStep(ctx);
-      return;
-    }
+    if (raw.toLowerCase() === "done") continue;
 
     const normalized = raw.startsWith("0x") ? raw : `0x${raw}`;
     let wallet: Wallet;
     try {
       wallet = new Wallet(normalized);
     } catch {
-      await ctx.reply(`❌ Invalid private key format received. Try again.`, { reply_markup: keysKeyboard(s.walletKeys.length > 0) });
+      invalid++;
       continue;
     }
 
     const dup = s.walletKeys.some(k => new Wallet(k).address.toLowerCase() === wallet.address.toLowerCase());
     if (dup) {
-      await ctx.reply(`⚠️ Duplicate key of <code>${shortAddr(wallet.address)}</code> — skipped.`, { parse_mode: "HTML", reply_markup: keysKeyboard(s.walletKeys.length > 0) });
+      dupes++;
       continue;
     }
 
     s.walletKeys.push(normalized);
-    await ctx.reply(
-      `✅ <b>[W${s.walletKeys.length - 1}]</b> <code>${wallet.address}</code>\n\n` +
-      `<i>Tap <b>Done (Continue to Chain)</b> below when finished adding keys.</i>`,
-      { parse_mode: "HTML", reply_markup: keysKeyboard(true) }
-    );
+    added++;
+  }
+
+  // One summary per message instead of one reply per key — bulk paste stays fast.
+  const parts: string[] = [];
+  if (added > 0) {
+    parts.push(`✅ Added ${added} wallet(s):`);
+    parts.push(...s.walletKeys.slice(-added).map((k, i) =>
+      `<b>[W${s.walletKeys.length - added + i}]</b> <code>${new Wallet(k).address}</code>`));
+  }
+  if (dupes > 0) parts.push(`⚠️ ${dupes} duplicate(s) skipped`);
+  if (invalid > 0) parts.push(`❌ ${invalid} invalid line(s) skipped`);
+
+  if (parts.length > 0) {
+    await ctx.reply(parts.join("\n"), { parse_mode: "HTML", reply_markup: keysKeyboard(s.walletKeys.length > 0) });
+  }
+
+  if (doneLine) {
+    await cleanupKeyMessages(ctx);
+    s.step = "chain";
+    await ctx.reply(`✅ Loaded ${s.walletKeys.length} wallet(s).`);
+    await sendChainStep(ctx);
   }
 }
 
