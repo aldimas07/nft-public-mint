@@ -35,6 +35,8 @@ export const CHAINS: ChainProfile[] = [
       alchemyHost: "eth-mainnet.g.alchemy.com",
       public: [
         "https://ethereum-rpc.publicnode.com",
+        "https://eth.drpc.org",
+        "https://rpc.mevblocker.io",
         "https://eth.merkle.io",
         "https://cloudflare-eth.com",
       ],
@@ -66,6 +68,8 @@ export const CHAINS: ChainProfile[] = [
     rpc: {
       alchemyHost: "robinhood-mainnet.g.alchemy.com",
       public: [
+        "https://rpc-robinhood.blockmachine.io",
+        "https://rpc.nodeflare.app/robinhood/public",
         "https://rpc.mainnet.chain.robinhood.com",
         "https://sequencer.mainnet.chain.robinhood.com",
       ],
@@ -79,8 +83,9 @@ export const CHAINS: ChainProfile[] = [
     nativeSymbol: "INK",
     rpc: {
       public: [
-        "https://rpc-gateway.inkonchain.com",
-        "https://rpc.inkonchain.com",
+        "https://rpc-qnd.inkonchain.com",
+        "https://rpc.nodeflare.app/ink/public",
+        "https://ink.api.pocket.network",
       ],
     },
   },

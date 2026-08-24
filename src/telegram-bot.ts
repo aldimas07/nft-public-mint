@@ -16,7 +16,7 @@ import {
   toRpcUrl,
 } from "./rpc-resolver";
 import { parseRpcEndpoints } from "./rpc-blast";
-import { buildLocalMintPlan, fetchMintStatus, LocalMintPlan } from "./seadrop-public";
+import { buildLocalMintPlan, fetchMintStatus, LocalMintPlan, readPublicDrop } from "./seadrop-public";
 import { localPublicSnipe, WalletMintReport } from "./local-mint";
 import { sweepMintedNfts } from "./sweep";
 import { istTimeToDate, toIST } from "./time-format";
@@ -306,6 +306,7 @@ function timingKeyboard(startsInFuture: boolean, startTime: Date): InlineKeyboar
     kb.text("🚀 Fire Immediately", "timing_now");
   }
   kb.text("🕐 Custom Time", "timing_custom").row();
+  kb.text("🔄 Refresh Mint Price", "price_refresh").row();
   kb.text("⬅️ Back", "nav_back").text("🗑 Cancel", "cmd_cancel");
   return kb;
 }
@@ -592,6 +593,11 @@ bot.callbackQuery(/^gas_preset_([\d.]+)_([\d.]+)$/, async (ctx) => {
 bot.callbackQuery("gas_refresh", async (ctx) => {
   await ctx.answerCallbackQuery("Refreshing base fee…");
   await proceedToGasStep(ctx);
+});
+
+bot.callbackQuery("price_refresh", async (ctx) => {
+  await ctx.answerCallbackQuery("Re-reading mint price from chain…");
+  await sendTimingStep(ctx);
 });
 
 bot.callbackQuery(/^timing_(.+)$/, async (ctx) => {
@@ -1184,19 +1190,22 @@ async function processAndApplyRpcs(ctx: MyContext, manualUrls: string[]) {
   await ctx.reply(`Probing ${candidateRpcs.length} RPC endpoint(s)...`);
   const plan = await planRpcs(candidateRpcs, chainProfile.chainId, preferred);
 
+  // ponytail: single batched report instead of one reply per endpoint — faster flow, less chat noise
+  const lines: string[] = [];
   for (const badEp of plan.dropped) {
     const wrong = resolveChain(badEp.chainId);
-    await ctx.reply(`✗ ${escapeHtml(badEp.url)} is on chain ${badEp.chainId}${wrong ? ` (${escapeHtml(wrong.name)})` : ""} — dropped`);
+    lines.push(`✗ <code>${escapeHtml(badEp.url)}</code> is on chain ${badEp.chainId}${wrong ? ` (${escapeHtml(wrong.name)})` : ""} — dropped`);
   }
   for (const ep of parseRpcEndpoints(plan.urls)) {
     const failure = plan.failures.find(f => f.url === ep.url);
     if (failure) {
       const benign = /not allowed|does not exist|not supported|method not found/i.test(failure.message);
-      await ctx.reply(`${benign ? "•" : "⚠"} ${escapeHtml(ep.label)}  ${escapeHtml(failure.message.slice(0, 90))}`);
+      lines.push(`${benign ? "•" : "⚠"} ${escapeHtml(ep.label)}  ${escapeHtml(failure.message.slice(0, 90))}`);
     } else {
-      await ctx.reply(`✅ ${escapeHtml(ep.label)}`);
+      lines.push(`✅ ${escapeHtml(ep.label)}`);
     }
   }
+  await ctx.reply(`🔎 <b>RPC Probe Results (${plan.urls.length} usable):</b>\n${lines.join("\n")}`, { parse_mode: "HTML" });
 
   if (plan.urls.length === 0) {
     await ctx.reply(`❌ No usable RPC endpoint for ${escapeHtml(chainProfile.name)}.`, { reply_markup: errorKeyboard("rpc") });
@@ -1374,9 +1383,24 @@ async function sendTimingStep(ctx: MyContext) {
   const startsInFuture = startTimeSec * 1000 > Date.now();
   const at = new Date(startTimeSec * 1000);
 
+  // ponytail: single RPC read for display only; rebuildMintPlan at fire time is the real safety net
+  let priceLine = "";
+  try {
+    const drop = await readPublicDrop(s.rpcUrls![0], s.nftContract!);
+    s.mintPlan!.drop = drop;
+    priceLine =
+      `<b>Current Mint Price:</b> ${formatEther(drop.mintPrice)} ${resolveChain(s.chainKey!)?.nativeSymbol ?? "ETH"}` +
+      ` × ${s.quantity} = <b>${formatEther(drop.mintPrice * BigInt(s.quantity!))} ${resolveChain(s.chainKey!)?.nativeSymbol ?? "ETH"}</b> per wallet\n\n`;
+  } catch {
+    // RPC hiccup — show the plan's snapshot instead, fire-time revalidation still guards
+    const p = s.mintPlan!;
+    priceLine = `<b>Mint Price (snapshot):</b> ${formatEther(p.drop.mintPrice)} × ${s.quantity} = <b>${formatEther(p.drop.mintPrice * BigInt(s.quantity!))}</b> per wallet\n\n`;
+  }
+
   s.step = "timing";
   await sendStepHeader(ctx,
     "⏰ Step 7: Timing",
+    `${priceLine}` +
     `<b>Stage Start:</b> ${toIST(at)} IST\n` +
     `<b>Status:</b> ${startsInFuture ? `🟡 Opens in ${formatRemaining(at.getTime() - Date.now())}` : "🟢 Live now"}\n\n` +
     `Choose execution timing:`,
