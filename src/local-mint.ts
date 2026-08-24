@@ -28,7 +28,18 @@ export interface LocalSnipeOpts {
   plan: LocalMintPlan;
 }
 
-export async function localPublicSnipe(opts: LocalSnipeOpts): Promise<void> {
+export interface WalletMintReport {
+  idx: number;
+  address: string;
+  txHash: string | null;
+  acceptedBy: string | null;   // RPC label that first accepted the tx
+  acceptLatencyMs: number | null;
+  status: "SUCCESS" | "REVERTED" | "PENDING" | "REJECTED";
+  block: number | null;
+  explorerUrl: string | null;
+}
+
+export async function localPublicSnipe(opts: LocalSnipeOpts): Promise<WalletMintReport[]> {
   const {
     nftContract, quantity, walletKeys, rpcUrls,
     maxFeePerGas, maxPriorityFee, gasLimit, targetStart,
@@ -310,6 +321,16 @@ export async function localPublicSnipe(opts: LocalSnipeOpts): Promise<void> {
   }
 
   console.log(chalk.gray("\n  Receipt results:"));
+  const report: WalletMintReport[] = acceptedWallets.map(({ idx, address, txHash, acceptedBy, receipt }) => ({
+    idx,
+    address,
+    txHash,
+    acceptedBy: acceptedBy?.label ?? null,
+    acceptLatencyMs: acceptedBy?.latencyMs ?? null,
+    status: (!acceptedBy ? "REJECTED" : !receipt ? "PENDING" : receipt.status) as WalletMintReport["status"],
+    block: receipt?.block ?? null,
+    explorerUrl: txHash ? explorerTx(chainId, txHash) : null,
+  }));
   for (const { idx, txHash, acceptedBy, receipt } of acceptedWallets) {
     if (!acceptedBy) continue;
     if (!receipt) {
@@ -324,6 +345,7 @@ export async function localPublicSnipe(opts: LocalSnipeOpts): Promise<void> {
   }
 
   console.log(chalk.bold.white("\n===== LOCAL PUBLIC MINT COMPLETE ====="));
+  return report;
 }
 
 async function refreshSigningState(

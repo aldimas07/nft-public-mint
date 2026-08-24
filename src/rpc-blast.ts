@@ -11,6 +11,7 @@ export interface BlastResult {
   label: string;
   txHash: string | null;
   error: string | null;
+  latencyMs?: number; // RPC response round-trip from blast start
 }
 
 // Parse RPC URLs and assign labels
@@ -120,7 +121,7 @@ export function blastToAll(
       }
       if (json.result) {
         console.log(chalk.green(`  [${i}] ${ep.label}  TX: ${json.result}  +${(respondedAt - startedAt).toFixed(1)}ms`));
-        return complete({ label: ep.label, txHash: json.result, error: null });
+        return complete({ label: ep.label, txHash: json.result, error: null, latencyMs: respondedAt - startedAt });
       }
       const error = json.error?.message || JSON.stringify(json.error || json);
       if (error.includes("already known") || error.includes("already exists")) {

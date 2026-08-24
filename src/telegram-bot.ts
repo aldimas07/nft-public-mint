@@ -1245,7 +1245,7 @@ async function executeMint(ctx: MyContext) {
   await ctx.reply("🚀 <b>Executing mint transactions on-chain…</b>", { parse_mode: "HTML" });
 
   try {
-    await localPublicSnipe({
+    const report = await localPublicSnipe({
       nftContract: s.nftContract!,
       quantity: s.quantity!,
       walletKeys: s.walletKeys,
@@ -1257,7 +1257,19 @@ async function executeMint(ctx: MyContext) {
       plan: s.mintPlan!,
     });
 
-    await ctx.reply("🎉 <b>Mint Execution Complete!</b>\n\nUse /mint to start another session.", { parse_mode: "HTML", reply_markup: mainMenuKeyboard() });
+    // Per-wallet result card: tx link, which RPC accepted it, its latency, status
+    const ok = report.filter(r => r.status === "SUCCESS").length;
+    let summary = `🎉 <b>Mint Execution Complete!</b>\n` +
+      `✅ ${ok}/${report.length} wallet(s) mined successfully\n\n`;
+    for (const r of report) {
+      const icon = r.status === "SUCCESS" ? "✅" : r.status === "REVERTED" ? "❌" : r.status === "PENDING" ? "⏳" : "🚫";
+      summary += `${icon} <b>[W${r.idx}]</b> <code>${shortAddr(r.address)}</code> — <b>${r.status}</b>`;
+      if (r.acceptedBy) summary += ` via ${escapeHtml(r.acceptedBy)} (${r.acceptLatencyMs !== null ? r.acceptLatencyMs.toFixed(0) + "ms" : "?"})`;
+      summary += "\n";
+      if (r.explorerUrl) summary += `     🔗 <a href="${r.explorerUrl}">Track tx</a>\n`;
+    }
+    summary += "\nUse /mint to start another session.";
+    await ctx.reply(summary, { parse_mode: "HTML", reply_markup: mainMenuKeyboard() });
     await cleanupKeyMessages(ctx);
     ctx.session = initialSession();
   } catch (err: any) {

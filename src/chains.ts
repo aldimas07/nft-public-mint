@@ -81,7 +81,6 @@ export const CHAINS: ChainProfile[] = [
       public: [
         "https://rpc-gateway.inkonchain.com",
         "https://rpc.inkonchain.com",
-        "https://ink.drpc.org",
       ],
     },
   },
