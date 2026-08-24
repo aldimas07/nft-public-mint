@@ -12,7 +12,7 @@ import { JsonRpcProvider, Wallet, formatEther, formatUnits } from "ethers";
 import { blastToAll, parseRpcEndpoints, prepareBlast, waitForReceipt, PreparedBlast } from "./rpc-blast";
 import { warmConnections } from "./connection-warmer";
 import { waitForMintTime } from "./timer";
-import { explorerTx } from "./chains";
+import { explorerTx, makeProvider } from "./chains";
 import { LocalMintPlan, fetchMintStatus, fetchPublicDrop, rebuildMintPlan } from "./seadrop-public";
 import { rpcTransport } from "./rpc-transport";
 
@@ -36,7 +36,7 @@ export async function localPublicSnipe(opts: LocalSnipeOpts): Promise<void> {
   let plan = opts.plan; // reassigned when drop revalidation finds on-chain changes
   const initialMintPrice = plan.drop.mintPrice;
 
-  const provider = new JsonRpcProvider(rpcUrls[0]);
+  const provider = makeProvider(rpcUrls[0]);
   const endpoints = parseRpcEndpoints(rpcUrls);
   const wallets = walletKeys.map((k) => new Wallet(k, provider));
 

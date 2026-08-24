@@ -8,7 +8,7 @@
 
 import chalk from "chalk";
 import { JsonRpcProvider, Wallet, formatEther, getAddress, isAddress, parseEther } from "ethers";
-import { CHAINS, ChainProfile, resolveChain } from "./chains";
+import { CHAINS, ChainProfile, makeProvider, resolveChain } from "./chains";
 import { parseNftLink } from "./nft-link";
 import { resolveSlug } from "./slug-resolver";
 import {
@@ -168,7 +168,7 @@ export async function runWizard(): Promise<void> {
   }
 
   // ── 7. Gas ────────────────────────────────────────────────────────────
-  const provider = new JsonRpcProvider(rpcUrls[0]);
+  const provider = makeProvider(rpcUrls[0]);
   console.log(chalk.bold.white("\nGas"));
   const baseFeeGwei = await currentBaseFeeGwei(provider);
   if (baseFeeGwei !== null) {

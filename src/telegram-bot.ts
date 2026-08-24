@@ -5,7 +5,7 @@ import { Bot, Context, InlineKeyboard, session, SessionFlavor } from "grammy";
 import dotenv from "dotenv";
 import path from "path";
 import { Wallet, JsonRpcProvider, formatEther, getAddress, isAddress, parseEther } from "ethers";
-import { CHAINS, ChainProfile, resolveChain } from "./chains";
+import { CHAINS, ChainProfile, makeProvider, resolveChain } from "./chains";
 import { parseNftLink } from "./nft-link";
 import { resolveSlug } from "./slug-resolver";
 import {
@@ -721,7 +721,7 @@ bot.on("message:text", async (ctx) => {
     const maxFee = parts[0];
     const priority = parts[1] ?? Math.min(0.05, maxFee);
 
-    const provider = new JsonRpcProvider(s.rpcUrls![0]);
+    const provider = makeProvider(s.rpcUrls![0]);
     const baseFeeGwei = await currentBaseFeeGwei(provider);
 
     if (baseFeeGwei !== null && maxFee < baseFeeGwei) {
@@ -1051,7 +1051,7 @@ async function proceedToGasStep(ctx: MyContext) {
     return;
   }
 
-  const provider = new JsonRpcProvider(s.rpcUrls[0]);
+  const provider = makeProvider(s.rpcUrls[0]);
 
   // Build mint plan from on-chain SeaDrop data
   let maxMintPrice = 0n;
@@ -1153,7 +1153,7 @@ async function sendTimingStep(ctx: MyContext) {
 async function showConfirmStep(ctx: MyContext) {
   const s = ctx.session;
   const chainProfile = resolveChain(s.chainKey!)!;
-  const provider = new JsonRpcProvider(s.rpcUrls![0]);
+  const provider = makeProvider(s.rpcUrls![0]);
   const wallets = s.walletKeys.map(k => new Wallet(k, provider));
   const balances = await Promise.all(wallets.map(w => provider.getBalance(w.address).catch(() => null)));
   

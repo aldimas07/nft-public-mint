@@ -10,7 +10,8 @@
 // server-produced signature bound to one wallet, so that path still needs
 // OpenSea and there is no local equivalent.
 
-import { Contract, Interface, JsonRpcProvider, formatEther } from "ethers";
+import { Contract, Interface, formatEther } from "ethers";
+import { makeProvider } from "./chains";
 
 export const SEADROP_ADDRESS = "0x00005EA00Ac477B1030CE78506496e8C2dE24bf5";
 
@@ -56,7 +57,7 @@ function isUnsetDrop(drop: PublicDrop): boolean {
 // use fetchPublicDrop; rebuildMintPlan needs to distinguish "RPC down" (keep
 // prepared transactions) from "drop confirmed gone" (abort).
 export async function readPublicDrop(rpcUrl: string, nftContract: string): Promise<PublicDrop> {
-  const provider = new JsonRpcProvider(rpcUrl);
+  const provider = makeProvider(rpcUrl);
   const seadrop = new Contract(SEADROP_ADDRESS, PUBLIC_ABI, provider);
   const raw = await seadrop.getPublicDrop(nftContract);
   return {
@@ -91,7 +92,7 @@ export async function resolveFeeRecipient(
   nftContract: string,
   restricted: boolean
 ): Promise<{ address: string; source: string } | null> {
-  const provider = new JsonRpcProvider(rpcUrl);
+  const provider = makeProvider(rpcUrl);
   const seadrop = new Contract(SEADROP_ADDRESS, PUBLIC_ABI, provider);
 
   let allowed: string[] = [];
@@ -271,7 +272,7 @@ export async function fetchMintStatus(
   plan: LocalMintPlan,
   from: string
 ): Promise<MintStatus> {
-  const provider = new JsonRpcProvider(rpcUrl);
+  const provider = makeProvider(rpcUrl);
   const nft = new Contract(nftContract, SUPPLY_ABI, provider);
 
   let totalSupply: bigint | null = null;

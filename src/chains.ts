@@ -10,6 +10,8 @@
 // so the existing OpenSea-based mint flow works on it unchanged — only the RPC
 // (in .env) and the explorer links (resolved here) differ from Base.
 
+import { JsonRpcProvider } from "ethers";
+
 export interface ChainProfile {
   key: string;          // OpenSea id + --chain value + CHAIN env value
   chainId: number;      // EVM network chain id
@@ -86,6 +88,12 @@ export const CHAINS: ChainProfile[] = [
 ];
 
 const DEFAULT_EXPLORER = "https://basescan.org";
+
+// drpc free tier rejects JSON-RPC batches >3 (code 31); ethers v6 batches up
+// to 100 by default. One request per POST everywhere — no batch, no rejection.
+export function makeProvider(url: string): JsonRpcProvider {
+  return new JsonRpcProvider(url, undefined, { batchMaxCount: 1 });
+}
 
 // Resolve a chain by its numeric chainId (from the live network) or by its
 // string key (--chain / CHAIN). Returns undefined for unknown chains.
