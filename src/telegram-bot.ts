@@ -70,6 +70,10 @@ interface MintSession {
   // Security & Privacy
   keyMessageIds?: number[];
   lastActivityTime?: number;
+  // Fast path: user pasted an OpenSea link while idle — chain detected from
+  // the URL, target resolved automatically after quantity, skipping the
+  // chain/target prompts.
+  pendingFastLink?: string;
 }
 
 type MyContext = Context & SessionFlavor<MintSession>;
@@ -477,6 +481,13 @@ bot.callbackQuery("keys_done", async (ctx) => {
   }
   await ctx.answerCallbackQuery(`Loaded ${s.walletKeys.length} wallet(s)`);
   await cleanupKeyMessages(ctx);
+  if (s.pendingFastLink) {
+    // Fast path: chain already detected from the pasted link.
+    s.step = "quantity";
+    await ctx.reply(`✅ Loaded ${s.walletKeys.length} wallet(s).`);
+    await sendQuantityStep(ctx);
+    return;
+  }
   s.step = "chain";
   await ctx.reply(`✅ Loaded ${s.walletKeys.length} wallet(s).`);
   await sendChainStep(ctx);
@@ -525,8 +536,17 @@ bot.callbackQuery(/^chain_(.+)$/, async (ctx) => {
 bot.callbackQuery(/^qty_(\d+)$/, async (ctx) => {
   const qty = parseInt(ctx.match[1], 10);
   ctx.session.quantity = qty;
-  ctx.session.step = "target";
   await ctx.answerCallbackQuery(`Quantity: ${qty}`);
+  const s = ctx.session;
+  if (s.pendingFastLink) {
+    // Fast path — resolve the stored link, skipping the target prompt.
+    const link = s.pendingFastLink;
+    s.pendingFastLink = undefined;
+    s.step = "target";
+    await handleTargetStep(ctx, link);
+    return;
+  }
+  ctx.session.step = "target";
   await sendTargetStep(ctx);
 });
 
@@ -671,6 +691,65 @@ bot.on("message:text", async (ctx) => {
   const s = ctx.session;
   const text = ctx.message.text.trim();
 
+  // Fast path: paste an OpenSea link (or contract address) while idle — no
+  // /mint needed. Chain is detected from the URL, the target auto-resolves
+  // after quantity selection, and the user goes straight to key entry.
+  if (s.step === "idle" && /opensea\.io\//i.test(text)) {
+    let parsed;
+    try {
+      parsed = parseNftLink(text);
+    } catch (err: any) {
+      await ctx.reply(`❌ ${sanitizeOutput(err.message)}\nUse /mint for the full setup flow.`);
+      return;
+    }
+    const hinted = parsed.chainHint ? resolveChain(parsed.chainHint) : null;
+    if (!hinted) {
+      // Slug links (opensea.io/collection/<slug>) carry no chain segment —
+      // fall back to resolving the slug via OpenSea's API, which reports the
+      // collection's chain. If that fails, ask for an item URL instead.
+      if (parsed.kind === "slug") {
+        const apiKey = (process.env.OPENSEA_API_KEY || "").trim();
+        try {
+          await ctx.reply(`🔎 Resolving collection "${escapeHtml(parsed.value)}"…`);
+          const info = await resolveSlug(parsed.value, apiKey || undefined);
+          const slugChain = info.chain ? resolveChain(info.chain) : null;
+          if (!slugChain) throw new Error(`collection is on "${info.chain || "unknown chain"}" — not supported here`);
+          s.chainKey = slugChain.key;
+          s.pendingFastLink = text;
+          s.walletKeys = [];
+          s.keyMessageIds = [];
+          s.step = "keys";
+          await ctx.reply(
+            `⚡ <b>Fast Mint</b>\n🔗 Chain detected: <b>${escapeHtml(slugChain.name)}</b> (ID ${slugChain.chainId})\n🎯 Target: ${escapeHtml(info.name || parsed.value)}\n\n` +
+            `Now send your <b>private key(s)</b> (one per line).\n🔒 Key messages are auto-deleted immediately. Tap <b>Done</b> when finished.`,
+            { parse_mode: "HTML", reply_markup: keysKeyboard(false) }
+          );
+          return;
+        } catch (err: any) {
+          await ctx.reply(
+            `❌ Could not detect the chain from a slug link (${sanitizeOutput(err.message)}).\nPaste the <b>item</b> URL instead: opensea.io/item/&lt;chain&gt;/0x…/&lt;id&gt;`
+          );
+          return;
+        }
+      }
+      await ctx.reply(
+        `❌ Could not detect the chain from that link${parsed.chainHint ? ` ("${escapeHtml(parsed.chainHint)}" is unsupported here)` : ""}.\nSupported: ${CHAINS.map(c => c.name).join(", ")}.`
+      );
+      return;
+    }
+    s.chainKey = hinted.key;
+    s.pendingFastLink = text; // re-parsed after keys — target resolves post-quantity
+    s.walletKeys = [];
+    s.keyMessageIds = [];
+    s.step = "keys";
+    await ctx.reply(
+      `⚡ <b>Fast Mint</b>\n🔗 Chain detected from link: <b>${escapeHtml(hinted.name)}</b> (ID ${hinted.chainId})\n🎯 Target: ${escapeHtml(parsed.kind === "slug" ? parsed.value : shortAddr(parsed.value))}\n\n` +
+      `Now send your <b>private key(s)</b> (one per line).\n🔒 Key messages are auto-deleted immediately. Tap <b>Done</b> when finished.`,
+      { parse_mode: "HTML", reply_markup: keysKeyboard(false) }
+    );
+    return;
+  }
+
   // Custom quantity input
   if (s.step === "quantity") {
     if (!/^\d+$/.test(text)) {
@@ -683,6 +762,14 @@ bot.on("message:text", async (ctx) => {
       return;
     }
     s.quantity = qty;
+    if (s.pendingFastLink) {
+      // Fast path — resolve the stored link now, skipping the target prompt.
+      const link = s.pendingFastLink;
+      s.pendingFastLink = undefined;
+      s.step = "target";
+      await handleTargetStep(ctx, link);
+      return;
+    }
     s.step = "target";
     await sendTargetStep(ctx);
     return;
@@ -848,6 +935,14 @@ async function handleKeysStep(ctx: MyContext, text: string) {
 
   if (doneLine) {
     await cleanupKeyMessages(ctx);
+    if (s.pendingFastLink) {
+      // Fast path: chain already detected from the pasted link — skip the
+      // chain picker and go straight to quantity.
+      s.step = "quantity";
+      await ctx.reply(`✅ Loaded ${s.walletKeys.length} wallet(s).`);
+      await sendQuantityStep(ctx);
+      return;
+    }
     s.step = "chain";
     await ctx.reply(`✅ Loaded ${s.walletKeys.length} wallet(s).`);
     await sendChainStep(ctx);
