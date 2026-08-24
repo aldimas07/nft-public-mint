@@ -1078,6 +1078,20 @@ async function proceedToGasStep(ctx: MyContext) {
   let mintPlan: LocalMintPlan | null = null;
   try {
     mintPlan = await buildLocalMintPlan(s.rpcUrls[0], s.nftContract!, s.quantity!, maxMintPrice);
+    // Clamp to the drop's per-wallet cap up front — a pre-signed tx with qty
+    // above the cap is a guaranteed revert and burns every wallet's FCFS slot.
+    if (mintPlan) {
+      const cap = mintPlan.drop.maxTotalMintableByWallet;
+      if (cap > 0 && s.quantity! > cap) {
+        const oldQty = s.quantity!;
+        s.quantity = cap;
+        mintPlan = await buildLocalMintPlan(s.rpcUrls[0], s.nftContract!, s.quantity, maxMintPrice);
+        await ctx.reply(
+          `⚠️ Quantity clamped <b>${oldQty} → ${cap}</b> per wallet (on-chain per-wallet cap).`,
+          { parse_mode: "HTML" }
+        );
+      }
+    }
   } catch (err: any) {
     await ctx.reply(`❌ Failed to query drop on-chain: ${sanitizeOutput(err.message)}`, { reply_markup: new InlineKeyboard().text("⬅️ Back to Target", "nav_back") });
     s.step = "target";
@@ -1206,9 +1220,12 @@ async function showConfirmStep(ctx: MyContext) {
 
   const shortWallets = wallets.filter((_, i) => balances[i] !== null && (balances[i] as bigint) < requiredPerWallet);
   if (shortWallets.length > 0) {
-    msg += `\n⚠️ <b>${shortWallets.length} wallet(s) underfunded.</b> Nodes require ${formatEther(requiredPerWallet)} ${chainProfile.nativeSymbol} minimum per wallet.`;
-    if (shortWallets.length === wallets.length) {
-      msg += "\n❌ All wallets underfunded — cannot proceed.";
+    const actualCost = s.mintPlan!.value; // what the tx actually sends
+    const gasOnly = BigInt(s.gasLimit!) * gweiToWei(s.maxFeeGwei!);
+    msg += `\n⚠️ <b>${shortWallets.length} wallet(s) below full reserve.</b> Nodes reserve ${formatEther(requiredPerWallet)} ${chainProfile.nativeSymbol} per wallet (mint ${formatEther(actualCost)} + max gas ${formatEther(gasOnly)}).`;
+    msg += `\n💡 Actual spend if mined: mint cost only — gas is refunded (EIP-1559), so wallets with ≥ ${formatEther(actualCost)} may still succeed.`;
+    if (shortWallets.length === wallets.length && balances.every(b => b !== null && (b as bigint) < actualCost)) {
+      msg += "\n❌ All wallets below the actual mint cost — cannot proceed.";
       await ctx.reply(msg, { parse_mode: "HTML" });
       await cleanupKeyMessages(ctx);
       ctx.session = initialSession();

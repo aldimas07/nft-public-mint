@@ -276,8 +276,17 @@ export async function localPublicSnipe(opts: LocalSnipeOpts): Promise<void> {
   await mintedOutWatcher;
   const acceptedCount = acceptedWallets.filter((entry) => entry.acceptedBy !== null).length;
   if (acceptedCount === 0) {
-    console.log(chalk.bold.red("\n===== NOTHING WAS BROADCAST — no receipts to wait for =====\n"));
-    return;
+    // Surface the failure instead of returning cleanly — callers (Telegram)
+    // treat a normal return as success and would announce "Mint Complete".
+    const firstReasons = settled
+      .flatMap(({ results }) => results.map((r) => r.error))
+      .find(Boolean);
+    const error = new Error(
+      `Nothing was broadcast — every RPC rejected all ${prepared.length} tx(s).` +
+      (firstReasons ? ` First rejection reason: ${firstReasons}` : "")
+    );
+    error.name = "NothingBroadcastError";
+    throw error;
   }
 
   console.log(chalk.gray("\n  Receipt results:"));
