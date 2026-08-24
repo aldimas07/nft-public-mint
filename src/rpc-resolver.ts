@@ -196,10 +196,16 @@ export async function planRpcs(
   // flaky public endpoint must not displace a configured private one.
   const prefSet = new Set(prefer);
   const matching = probes.filter((p) => p.chainId === expectedChainId);
+  // Chain-operator endpoints (sequencer-adjacent) rank above third-party
+  // gateways for blasting: in the inkopus war the shared Alchemy gateway took
+  // 7.6s round-trips under load while operator endpoints included at T+0.
+  const isOperator = (url: string): boolean =>
+    /rpc(\.|-gateway\.)inkonchain\.com|sequencer\./i.test(url);
   const byLatency = (a: { latencyMs: number }, b: { latencyMs: number }) => a.latencyMs - b.latencyMs;
   const ranked = [
     ...matching.filter((p) => prefSet.has(p.url)).sort(byLatency),
-    ...matching.filter((p) => !prefSet.has(p.url)).sort(byLatency),
+    ...matching.filter((p) => !prefSet.has(p.url) && isOperator(p.url)).sort(byLatency),
+    ...matching.filter((p) => !prefSet.has(p.url) && !isOperator(p.url)).sort(byLatency),
   ].map((p) => p.url);
   const sendOnly = probes
     .filter((p) => p.chainId === null && isSendOnlyError(p.error))

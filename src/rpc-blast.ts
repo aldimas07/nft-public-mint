@@ -27,6 +27,10 @@ function labelFromUrl(url: string, index: number): string {
   if (lower.includes("sequencer.base.org")) return "mainnet-sequencer.base.org";
   if (lower.includes("sequencer.mainnet.chain.robinhood.com")) return "robinhood-sequencer";
   if (lower.includes("rpc.mainnet.chain.robinhood.com")) return "robinhood-public";
+  // Chain-operator endpoints (closest to the sequencer — first inclusion)
+  if (lower.includes("rpc.inkonchain.com")) return "INK-OPERATOR";
+  if (lower.includes("rpc-gateway.inkonchain.com")) return "INK-GATEWAY";
+  if (lower.includes("rpc-qnd.inkonchain.com")) return "INK-QND";
   if (lower.includes("alchemy")) return "ALCHEMY";
   if (lower.includes("flashbots")) return "FLASHBOTS-PROTECT";
   if (lower.includes("llamarpc")) {

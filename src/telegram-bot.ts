@@ -657,6 +657,9 @@ bot.callbackQuery(/^confirm_(.+)_(yes|no)$/, async (ctx) => {
     case "rpc_verify":
       await handleRpcVerifyYes(ctx);
       break;
+    case "rpc_single":
+      await handleRpcSingleYes(ctx);
+      break;
     case "timing_early":
       await handleTimingEarlyYes(ctx);
       break;
@@ -680,6 +683,11 @@ async function handleNo(ctx: MyContext, type: string) {
     case "rpc_verify":
       await ctx.editMessageText("Send different RPC endpoints:");
       s.step = "rpc";
+      break;
+    case "rpc_single":
+      // Accept the single-endpoint risk and continue to gas setup.
+      await ctx.editMessageText("⚠️ Proceeding with 1 endpoint — single point of failure at fire time.");
+      await proceedToGasStep(ctx);
       break;
     case "timing_early":
       delete s.pendingCustomTime;
@@ -1198,6 +1206,20 @@ async function processAndApplyRpcs(ctx: MyContext, manualUrls: string[]) {
 
   s.rpcUrls = plan.urls;
 
+  // War-readiness gate: a single live endpoint is a single point of failure —
+  // in the inkopus war one congested gateway dropped 7/11 txs on the floor.
+  const blastable = plan.urls.length;
+  if (plan.verified && blastable === 1) {
+    await ctx.reply(
+      `⚠️ <b>Only 1 usable endpoint (${escapeHtml(parseRpcEndpoints(plan.urls)[0].label)}).</b>\n` +
+      `In a mint war this is a single point of failure — if it rate-limits or times out at T-0, txs never broadcast.\n\n` +
+      `Add more endpoints? (paste comma-separated URLs, or pick "Use Public RPC")`,
+      { parse_mode: "HTML", reply_markup: yesNoKeyboard("confirm_rpc_single") }
+    );
+    s.step = "rpc_verify_confirm";
+    return;
+  }
+
   if (!plan.verified) {
     await ctx.reply(
       `⚠️ No endpoint confirmed chain id ${chainProfile.chainId}.\nContinue anyway?`,
@@ -1558,6 +1580,14 @@ async function handleRpcVerifyYes(ctx: MyContext) {
   const chainProfile = resolveChain(s.chainKey!)!;
   await ctx.editMessageText(`✅ Proceeding with RPC endpoints for Chain ID ${chainProfile.chainId} (${escapeHtml(chainProfile.name)})`);
   await proceedToGasStep(ctx);
+}
+
+// "Yes" on the single-endpoint warning: go back to RPC setup so the user adds
+// more endpoints (the recommended path). "No" (handleNo default) proceeds.
+async function handleRpcSingleYes(ctx: MyContext) {
+  const s = ctx.session;
+  s.step = "rpc";
+  await proceedToRpcStep(ctx);
 }
 
 async function handleTimingEarlyYes(ctx: MyContext) {
