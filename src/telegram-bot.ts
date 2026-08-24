@@ -17,7 +17,8 @@ import {
 } from "./rpc-resolver";
 import { parseRpcEndpoints } from "./rpc-blast";
 import { buildLocalMintPlan, fetchMintStatus, LocalMintPlan } from "./seadrop-public";
-import { localPublicSnipe } from "./local-mint";
+import { localPublicSnipe, WalletMintReport } from "./local-mint";
+import { sweepMintedNfts } from "./sweep";
 import { istTimeToDate, toIST } from "./time-format";
 
 dotenv.config({ path: path.resolve(process.cwd(), ".env") });
@@ -42,6 +43,7 @@ type Step =
   | "timing_custom"
   | "confirm"
   | "minting"
+  | "sweep"
   | "done";
 
 interface MintSession {
@@ -74,6 +76,10 @@ interface MintSession {
   // the URL, target resolved automatically after quantity, skipping the
   // chain/target prompts.
   pendingFastLink?: string;
+  // Post-mint sweep: successful wallets held for a possible "send all minted
+  // NFTs to one address" action.
+  lastMintReport?: WalletMintReport[];
+  sweepStep?: "ask" | "address";
 }
 
 type MyContext = Context & SessionFlavor<MintSession>;
@@ -683,6 +689,67 @@ async function handleNo(ctx: MyContext, type: string) {
   }
 }
 
+bot.callbackQuery("sweep_start", async (ctx) => {
+  const s = ctx.session;
+  if (s.step !== "sweep" || !s.lastMintReport) { await ctx.answerCallbackQuery("No mint results"); return; }
+  await ctx.answerCallbackQuery();
+  s.sweepStep = "address";
+  await ctx.reply(
+    `📤 <b>Sweep Minted NFTs</b>\nSend the <b>destination address</b> (0x…).\n\nWallets that ARE the destination are skipped automatically (NFTs already there).`,
+    { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("🗑 Cancel", "sweep_skip") }
+  );
+});
+
+bot.callbackQuery("sweep_skip", async (ctx) => {
+  await ctx.answerCallbackQuery("Session finished");
+  await cleanupKeyMessages(ctx);
+  ctx.session = initialSession();
+  await ctx.reply("✅ Session closed. Use /mint to start another.", { reply_markup: mainMenuKeyboard() });
+});
+
+bot.callbackQuery("sweep_confirm_yes", async (ctx) => {
+  const s = ctx.session;
+  if (s.step !== "sweep" || !s.lastMintReport || !s.pendingAddress) { await ctx.answerCallbackQuery("No sweep pending"); return; }
+  await ctx.answerCallbackQuery("Sweeping…");
+  const dest = s.pendingAddress;
+  await ctx.reply(`📤 <b>Sweeping NFTs to ${shortAddr(dest)}…</b>`, { parse_mode: "HTML" });
+
+  try {
+    const results = await sweepMintedNfts({
+      nftContract: s.nftContract!,
+      rpcUrl: s.rpcUrls![0],
+      to: dest,
+      walletKeys: s.walletKeys,
+      report: s.lastMintReport,
+      maxFeePerGas: gweiToWei(s.maxFeeGwei!),
+      maxPriorityFee: gweiToWei(s.priorityGwei!),
+      gasLimit: s.gasLimit!,
+    });
+
+    const explorer = resolveChain(s.chainKey!)?.explorer ?? "";
+    let msg = `📦 <b>Sweep Complete</b>\n`;
+    for (const r of results) {
+      if (r.sent > 0) {
+        msg += `\n✅ [W${r.idx}] <code>${shortAddr(r.wallet)}</code> — ${r.sent} NFT(s) sent`;
+        for (const h of r.txHashes) msg += `\n     🔗 <a href="${explorer}/tx/${h}">${shortAddr(h)}</a>`;
+      } else {
+        msg += `\n⏭️ [W${r.idx}] <code>${shortAddr(r.wallet)}</code> — skipped (${escapeHtml(sanitizeOutput(r.error ?? "no NFTs"))})`;
+      }
+    }
+    await ctx.reply(msg, { parse_mode: "HTML", reply_markup: mainMenuKeyboard() });
+  } catch (err: any) {
+    await ctx.reply(`❌ <b>Sweep Failed:</b> ${sanitizeOutput(err.message)}`, { parse_mode: "HTML", reply_markup: mainMenuKeyboard() });
+  }
+  await cleanupKeyMessages(ctx);
+  ctx.session = initialSession();
+});
+
+bot.callbackQuery("sweep_confirm_no", async (ctx) => {
+  await ctx.answerCallbackQuery("Cancelled");
+  ctx.session = initialSession();
+  await ctx.reply("Sweep cancelled. Session closed — use /mint to start another.", { reply_markup: mainMenuKeyboard() });
+});
+
 // ============================================
 // Message Handler
 // ============================================
@@ -825,6 +892,26 @@ bot.on("message:text", async (ctx) => {
     s.gasLimit = parseInt(process.env.GAS_LIMIT || "0", 10) || 250_000;
 
     await sendTimingStep(ctx);
+    return;
+  }
+
+  // Sweep destination address input
+  if (s.step === "sweep" && s.sweepStep === "address") {
+    const normalized = normalizeAddress(text);
+    if (!normalized) {
+      await ctx.reply("❌ Not a valid address (0x…). Try again or press Cancel.");
+      return;
+    }
+    const dest = normalized.address;
+    const report = s.lastMintReport!;
+    const successWallets = report.filter(r => r.status === "SUCCESS");
+    const skipped = successWallets.filter(r => r.address.toLowerCase() === dest.toLowerCase()).length;
+
+    let confirmMsg = `📤 <b>Sweep Confirmation</b>\nTo: <code>${dest}</code>\nFrom: ${successWallets.length - skipped} successful wallet(s)`;
+    if (skipped > 0) confirmMsg += `\n⏭️ ${skipped} wallet(s) ARE the destination — skipped (no tx needed)`;
+    confirmMsg += `\n\nEach NFT is one safeTransferFrom tx (gas per tx). Execute?`;
+    s.pendingAddress = dest;
+    await ctx.reply(confirmMsg, { parse_mode: "HTML", reply_markup: yesNoKeyboard("sweep_confirm") });
     return;
   }
 
@@ -1364,9 +1451,23 @@ async function executeMint(ctx: MyContext) {
       if (r.explorerUrl) summary += `     🔗 <a href="${r.explorerUrl}">Track tx</a>\n`;
     }
     summary += "\nUse /mint to start another session.";
-    await ctx.reply(summary, { parse_mode: "HTML", reply_markup: mainMenuKeyboard() });
-    await cleanupKeyMessages(ctx);
-    ctx.session = initialSession();
+    // Hold the successful wallets so the user can sweep them afterwards.
+    s.lastMintReport = report;
+    if (ok > 0) {
+      s.step = "sweep";
+      s.sweepStep = "ask";
+      await ctx.reply(summary, {
+        parse_mode: "HTML",
+        reply_markup: new InlineKeyboard()
+          .text("📤 Send all minted NFTs to an address", "sweep_start")
+          .row()
+          .text("❌ No — finish session", "sweep_skip"),
+      });
+    } else {
+      await ctx.reply(summary, { parse_mode: "HTML", reply_markup: mainMenuKeyboard() });
+      await cleanupKeyMessages(ctx);
+      ctx.session = initialSession();
+    }
   } catch (err: any) {
     if (err.name === "MintedOutError" || err.message?.includes("minted out")) {
       await ctx.reply(`🚫 <b>Minted Out On-Chain!</b>\n\n${sanitizeOutput(err.message)}\n\nMinting stopped. Use /mint for another session.`, {
