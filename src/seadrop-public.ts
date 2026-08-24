@@ -135,6 +135,9 @@ export function encodeMintPublic(
 // back automatically. Downside: the wallet must hold the reserved amount
 // through the mint (nodes require balance ≥ gasLimit × maxFee + value).
 export function mintValue(mintPrice: bigint, maxMintPrice: bigint, quantity: number): bigint {
+  // Free drop: never reserve a hedge on top of free — the cap bounds payment
+  // risk, and a paid cap on a free drop only inflates node balance reserves.
+  if (mintPrice === 0n) return 0n;
   const effective = maxMintPrice > mintPrice ? maxMintPrice : mintPrice;
   return effective * BigInt(quantity);
 }

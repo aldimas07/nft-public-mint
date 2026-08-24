@@ -989,9 +989,10 @@ async function processAndApplyRpcs(ctx: MyContext, manualUrls: string[]) {
   const s = ctx.session;
   const chainProfile = resolveChain(s.chainKey!)!;
   const { urls: candidateRpcs } = resolveRpcsForChain(s.chainKey!, manualUrls);
+  const preferred = privateRpcsFromEnv(chainProfile.key);
 
   await ctx.reply(`Probing ${candidateRpcs.length} RPC endpoint(s)...`);
-  const plan = await planRpcs(candidateRpcs, chainProfile.chainId);
+  const plan = await planRpcs(candidateRpcs, chainProfile.chainId, preferred);
 
   for (const badEp of plan.dropped) {
     const wrong = resolveChain(badEp.chainId);

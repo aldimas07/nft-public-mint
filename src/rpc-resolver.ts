@@ -182,15 +182,25 @@ function isSendOnlyError(error: string | undefined): boolean {
   return Boolean(error && /method not found|not supported|does not exist|not allowed/i.test(error));
 }
 
-export async function planRpcs(urls: string[], expectedChainId: number): Promise<RpcPlan> {
+export async function planRpcs(
+  urls: string[],
+  expectedChainId: number,
+  prefer: string[] = []
+): Promise<RpcPlan> {
   const probes = await Promise.all(
     urls.map(async (url) => ({ url, ...(await probe(url)) }))
   );
 
-  const matching = probes
-    .filter((p) => p.chainId === expectedChainId)
-    .sort((a, b) => a.latencyMs - b.latencyMs)
-    .map((p) => p.url);
+  // Private (.env) endpoints rank above public ones; latency orders within
+  // each group. rpcUrls[0] is the read provider everywhere, so a fast-but-
+  // flaky public endpoint must not displace a configured private one.
+  const prefSet = new Set(prefer);
+  const matching = probes.filter((p) => p.chainId === expectedChainId);
+  const byLatency = (a: { latencyMs: number }, b: { latencyMs: number }) => a.latencyMs - b.latencyMs;
+  const ranked = [
+    ...matching.filter((p) => prefSet.has(p.url)).sort(byLatency),
+    ...matching.filter((p) => !prefSet.has(p.url)).sort(byLatency),
+  ].map((p) => p.url);
   const sendOnly = probes
     .filter((p) => p.chainId === null && isSendOnlyError(p.error))
     .sort((a, b) => a.latencyMs - b.latencyMs)
@@ -203,8 +213,8 @@ export async function planRpcs(urls: string[], expectedChainId: number): Promise
     .map((p) => ({ url: p.url, message: p.error as string }));
 
   return {
-    urls: [...matching, ...sendOnly],
-    verified: matching.length > 0,
+    urls: [...ranked, ...sendOnly],
+    verified: ranked.length > 0,
     dropped,
     sendOnly,
     failures,
